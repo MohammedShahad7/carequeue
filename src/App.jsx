@@ -1,11 +1,13 @@
 
 import { useEffect, useState } from "react";
+
 import {
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
+
 import {
   collection,
   doc,
@@ -17,12 +19,14 @@ import {
   setDoc,
   serverTimestamp,
 } from "firebase/firestore";
+
 import {
   auth,
   db,
   patientAuth,
   patientDb,
 } from "./firebase";
+
 import {
   Activity,
   ArrowRight,
@@ -36,6 +40,7 @@ import {
   Users,
   UserRound,
 } from "lucide-react";
+
 import "./index.css";
 
 const departments = [
@@ -65,6 +70,7 @@ function App() {
   const [latestToken, setLatestToken] = useState(null);
   const [notice, setNotice] = useState("");
   const [registering, setRegistering] = useState(false);
+  const [responding, setResponding] = useState(false);
 
   // Staff authentication
   useEffect(() => {
@@ -88,14 +94,18 @@ function App() {
         setStaffVerified(authorized);
 
         if (!authorized) {
-          setStaffError("This account is not authorized for staff access.");
+          setStaffError(
+            "This account is not authorized for staff access."
+          );
           await signOut(auth);
         } else {
           setStaffError("");
         }
       } catch (error) {
         console.error("Staff verification failed:", error);
-        setStaffError("Could not verify staff permissions. Check Firestore rules.");
+        setStaffError(
+          "Could not verify staff permissions. Check Firestore rules."
+        );
         await signOut(auth);
       } finally {
         setAuthReady(true);
@@ -110,6 +120,7 @@ function App() {
     const unsubscribe = onAuthStateChanged(patientAuth, async (user) => {
       if (user) {
         setPatientAuthReady(true);
+        setAuthError("");
         return;
       }
 
@@ -128,7 +139,7 @@ function App() {
     return unsubscribe;
   }, []);
 
-  // Load the correct queue for the current page
+  // Live queue listener
   useEffect(() => {
     if (!authReady) return;
 
@@ -159,6 +170,7 @@ function App() {
       (snapshot) => {
         const loadedPatients = snapshot.docs.map((item) => {
           const data = item.data();
+
           const createdAt = data.createdAt?.toDate
             ? data.createdAt.toDate()
             : null;
@@ -167,10 +179,13 @@ function App() {
             id: item.id,
             name: data.patientName,
             department:
-              departments.find((entry) => entry.code === data.department)
-                ?.name || data.department,
+              departments.find(
+                (entry) => entry.code === data.department
+              )?.name || data.department,
             token: data.token,
             status: data.status,
+            patientResponse: data.patientResponse || "",
+            createdAt,
             time: createdAt
               ? createdAt.toLocaleTimeString([], {
                   hour: "2-digit",
@@ -194,6 +209,19 @@ function App() {
 
     return unsubscribe;
   }, [authReady, patientAuthReady, page, staffVerified]);
+
+  // FIFO: earliest registration first
+  const sortedPatients = [...patients].sort((a, b) => {
+    const timeA = a.createdAt
+      ? a.createdAt.getTime()
+      : Number.MAX_SAFE_INTEGER;
+
+    const timeB = b.createdAt
+      ? b.createdAt.getTime()
+      : Number.MAX_SAFE_INTEGER;
+
+    return timeA - timeB;
+  });
 
   function openStaffPortal() {
     setPage("admin");
@@ -219,7 +247,9 @@ function App() {
       if (error.code === "auth/invalid-credential") {
         setStaffError("Incorrect email or password.");
       } else if (error.code === "auth/too-many-requests") {
-        setStaffError("Too many attempts. Please wait and try again.");
+        setStaffError(
+          "Too many attempts. Please wait and try again."
+        );
       } else {
         setStaffError(error.message || "Staff login failed.");
       }
@@ -270,6 +300,7 @@ function App() {
 
     try {
       const user = patientAuth.currentUser;
+
       const registrationRef = doc(
         collection(patientDb, "registrations")
       );
@@ -293,13 +324,15 @@ function App() {
         name: name.trim(),
         department,
         token,
-        status: "Waiting",
       });
 
       setName("");
-      setNotice("Registration successful! Your token is " + token + ".");
+      setNotice(
+        "Registration successful! Your token is " + token + "."
+      );
     } catch (error) {
       console.error("Registration failed:", error);
+
       setNotice(
         "Registration failed: " +
           (error.code === "permission-denied"
@@ -311,6 +344,50 @@ function App() {
     }
   }
 
+  // Patient responds when the doctor calls
+  async function respondToDoctor(response) {
+    if (!patientAuthReady || !patientAuth.currentUser) {
+      setNotice("Patient connection is not ready. Please try again.");
+      return;
+    }
+
+    if (!["Coming", "Not Coming"].includes(response)) return;
+    if (!latestToken || responding) return;
+
+    const currentPatient = patients.find(
+      (patient) => patient.id === latestToken.id
+    );
+
+    if (!currentPatient || currentPatient.status !== "Called") {
+      setNotice("Your token is not currently being called.");
+      return;
+    }
+
+    if (currentPatient.patientResponse) {
+      setNotice("You have already submitted your response.");
+      return;
+    }
+
+    setResponding(true);
+
+    try {
+      await updateDoc(
+        doc(patientDb, "registrations", latestToken.id),
+        { patientResponse: response }
+      );
+
+      setNotice("Your response has been sent to the staff.");
+    } catch (error) {
+      console.error("Patient response failed:", error);
+      setNotice(
+        "Could not send your response. Check Firestore rules."
+      );
+    } finally {
+      setResponding(false);
+    }
+  }
+
+  // Staff changes patient status
   async function updateStatus(id, status) {
     if (!staffVerified) {
       setNotice("Only authorized staff can update queue status.");
@@ -320,7 +397,14 @@ function App() {
     if (!["Waiting", "Called", "Completed"].includes(status)) return;
 
     try {
-      await updateDoc(doc(db, "registrations", id), { status });
+      const changes = { status };
+
+      // Reset the previous response when the patient is called again.
+      if (status === "Called") {
+        changes.patientResponse = null;
+      }
+
+      await updateDoc(doc(db, "registrations", id), changes);
       setNotice("Queue status updated to " + status + ".");
     } catch (error) {
       console.error("Status update failed:", error);
@@ -329,7 +413,7 @@ function App() {
   }
 
   async function callNext(departmentName) {
-    const nextPatient = patients.find(
+    const nextPatient = sortedPatients.find(
       (patient) =>
         patient.department === departmentName &&
         patient.status === "Waiting"
@@ -351,6 +435,10 @@ function App() {
     (patient) => patient.status === "Completed"
   );
 
+  const latestTokenPatient = latestToken
+    ? patients.find((patient) => patient.id === latestToken.id)
+    : null;
+
   if (!authReady) {
     return (
       <div className="app-shell">
@@ -371,7 +459,9 @@ function App() {
             setNotice("");
           }}
         >
-          <span className="brand-icon"><Hospital size={23} /></span>
+          <span className="brand-icon">
+            <Hospital size={23} />
+          </span>
           <span>
             Care<span className="brand-accent">Queue</span>
             <small>SMART HOSPITAL SYSTEM</small>
@@ -398,16 +488,25 @@ function App() {
           </button>
         </nav>
 
-        <div className="system-status"><span /> Demo Mode</div>
+        <div className="system-status">
+          <span /> Demo Mode
+        </div>
       </header>
 
       <main className="main-content">
         {page === "admin" && !staffVerified ? (
           <section className="staff-login-page">
             <div className="staff-login-card">
-              <div className="staff-login-icon"><Hospital size={32} /></div>
-              <span className="staff-login-label">CAREQUEUE STAFF PORTAL</span>
+              <div className="staff-login-icon">
+                <Hospital size={32} />
+              </div>
+
+              <span className="staff-login-label">
+                CAREQUEUE STAFF PORTAL
+              </span>
+
               <h2>Welcome back</h2>
+
               <p className="staff-login-description">
                 Sign in to manage hospital queues and patient flow.
               </p>
@@ -429,14 +528,18 @@ function App() {
                   id="staffPassword"
                   type="password"
                   value={staffPassword}
-                  onChange={(event) => setStaffPassword(event.target.value)}
+                  onChange={(event) =>
+                    setStaffPassword(event.target.value)
+                  }
                   placeholder="Enter your password"
                   autoComplete="current-password"
                   required
                 />
 
                 {staffError && (
-                  <p className="staff-login-error" role="alert">{staffError}</p>
+                  <p className="staff-login-error" role="alert">
+                    {staffError}
+                  </p>
                 )}
 
                 <button
@@ -444,7 +547,9 @@ function App() {
                   className="staff-login-button"
                   disabled={staffLoading}
                 >
-                  {staffLoading ? "Verifying account..." : "Sign in to dashboard"}
+                  {staffLoading
+                    ? "Verifying account..."
+                    : "Sign in to dashboard"}
                   {!staffLoading && <ArrowRight size={18} />}
                 </button>
               </form>
@@ -461,12 +566,19 @@ function App() {
                 <div className="eyebrow">
                   <HeartPulse size={15} /> HEALTHCARE, MADE SIMPLER
                 </div>
-                <h1>Less waiting.<br /><span>More caring.</span></h1>
+
+                <h1>
+                  Less waiting.
+                  <br />
+                  <span>More caring.</span>
+                </h1>
+
                 <p>
                   Join your hospital queue digitally and track your token
                   without standing in line.
                 </p>
               </div>
+
               <div className="welcome-art">
                 <Hospital size={88} strokeWidth={1.1} />
                 <HeartPulse className="floating-heart" size={34} />
@@ -478,6 +590,7 @@ function App() {
                 <h2>Get your token</h2>
                 <p>Enter your name and select a department.</p>
               </div>
+
               <span className="step-label">STEP 01 / REGISTER</span>
             </div>
 
@@ -485,6 +598,7 @@ function App() {
               <section className="panel">
                 <form onSubmit={registerPatient}>
                   <label htmlFor="patientName">Patient name</label>
+
                   <div className="input-wrap">
                     <UserRound size={18} />
                     <input
@@ -497,9 +611,11 @@ function App() {
                   </div>
 
                   <label>Choose department</label>
+
                   <div className="department-options">
                     {departments.map((item) => {
                       const Icon = item.icon;
+
                       return (
                         <button
                           type="button"
@@ -530,7 +646,9 @@ function App() {
                       : !patientAuthReady
                       ? "Connecting..."
                       : "Get my token"}
-                    {!registering && patientAuthReady && <ArrowRight size={17} />}
+                    {!registering && patientAuthReady && (
+                      <ArrowRight size={17} />
+                    )}
                   </button>
 
                   <p className="privacy-note">
@@ -539,19 +657,85 @@ function App() {
                   </p>
                 </form>
 
+                {authError && (
+                  <div className="notice" role="alert">
+                    {authError}
+                  </div>
+                )}
+
                 {notice && <div className="notice">{notice}</div>}
 
                 {latestToken && (
                   <div className="token-result">
                     <div className="token-success">
-                      <CheckCircle size={18} /> Token generated successfully
+                      <CheckCircle size={18} />
+                      Token generated successfully
                     </div>
-                    <div className="token-number">{latestToken.token}</div>
+
+                    <div className="token-number">
+                      {latestToken.token}
+                    </div>
+
                     <p>
-                      {latestToken.name}, your department is {latestToken.department}.
+                      {latestToken.name}, your department is{" "}
+                      {latestToken.department}.
                     </p>
+
+                    {latestTokenPatient?.status === "Called" && (
+                      <div
+                        className="doctor-calling-message"
+                        role="alert"
+                      >
+                        <h3>🔔 Doctor is calling you!</h3>
+                        <p>Please proceed to the doctor's room.</p>
+
+                        {latestTokenPatient.patientResponse ? (
+                          <p className="patient-response">
+                            Your response:{" "}
+                            {latestTokenPatient.patientResponse === "Coming"
+                              ? "I'm Coming"
+                              : "I'm Not Coming"}
+                          </p>
+                        ) : (
+                          <div className="patient-response-buttons">
+                            <button
+                              type="button"
+                              className="coming-button"
+                              disabled={responding}
+                              onClick={() => respondToDoctor("Coming")}
+                            >
+                              {responding
+                                ? "Sending..."
+                                : "✅ I'm Coming"}
+                            </button>
+
+                            <button
+                              type="button"
+                              className="not-coming-button"
+                              disabled={responding}
+                              onClick={() => respondToDoctor("Not Coming")}
+                            >
+                              {responding
+                                ? "Sending..."
+                                : "❌ I'm Not Coming"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {latestTokenPatient?.status === "Completed" && (
+                      <div className="patient-response">
+                        <CheckCircle size={16} />
+                        Your consultation is marked as completed.
+                      </div>
+                    )}
+
                     <div className="token-details">
-                      <span><Users size={15} /> {waitingPatients.length} waiting</span>
+                      <span>
+                        <Users size={15} /> {waitingPatients.length} waiting
+                      </span>
+
                       <span>
                         <Clock size={15} /> Estimated wait:{" "}
                         {Math.max(0, waitingPatients.length - 1) * 10} min
@@ -567,11 +751,15 @@ function App() {
                     <span className="mini-label">QUEUE OVERVIEW</span>
                     <h3>Your queue activity</h3>
                   </div>
-                  <span className="live-pill"><span /> DEMO</span>
+
+                  <span className="live-pill">
+                    <span /> DEMO
+                  </span>
                 </div>
 
                 {departments.map((item) => {
                   const Icon = item.icon;
+
                   const count = patients.filter(
                     (patient) =>
                       patient.department === item.name &&
@@ -580,11 +768,15 @@ function App() {
 
                   return (
                     <div className="department-row" key={item.code}>
-                      <div className="department-icon"><Icon size={20} /></div>
+                      <div className="department-icon">
+                        <Icon size={20} />
+                      </div>
+
                       <div className="department-info">
                         <strong>{item.name}</strong>
                         <span>{count} of your registrations waiting</span>
                       </div>
+
                       <div className="queue-count">{count}</div>
                     </div>
                   );
@@ -599,10 +791,17 @@ function App() {
                 <div className="eyebrow">
                   <LayoutDashboard size={15} /> STAFF CONTROL CENTER
                 </div>
-                <h1>Queue <span>dashboard</span></h1>
+
+                <h1>
+                  Queue <span>dashboard</span>
+                </h1>
+
                 <p>Manage patient flow across departments.</p>
               </div>
-              <div className="dashboard-date">{new Date().toLocaleDateString()}</div>
+
+              <div className="dashboard-date">
+                {new Date().toLocaleDateString()}
+              </div>
             </section>
 
             <section className="stats-grid">
@@ -611,11 +810,13 @@ function App() {
                 <span>Total patients</span>
                 <strong>{patients.length}</strong>
               </div>
+
               <div className="stat-card">
                 <Clock />
                 <span>Waiting now</span>
                 <strong>{waitingPatients.length}</strong>
               </div>
+
               <div className="stat-card">
                 <CheckCircle />
                 <span>Completed</span>
@@ -632,7 +833,9 @@ function App() {
               </div>
 
               {notice && <div className="notice">{notice}</div>}
+
               {queueLoading && <p>Loading queue from Firestore...</p>}
+
               {queueError && <p role="alert">{queueError}</p>}
 
               <div className="table-scroll">
@@ -643,44 +846,85 @@ function App() {
                       <th>Department</th>
                       <th>Time</th>
                       <th>Status</th>
+                      <th>Patient response</th>
                       <th>Action</th>
                     </tr>
                   </thead>
+
                   <tbody>
-                    {patients.map((patient) => (
+                    {sortedPatients.map((patient) => (
                       <tr key={patient.id}>
                         <td>
                           <strong>{patient.name}</strong>
-                          <span className="token-cell">{patient.token}</span>
+                          <span className="token-cell">
+                            {patient.token}
+                          </span>
                         </td>
+
                         <td>{patient.department}</td>
                         <td>{patient.time}</td>
+
                         <td>
-                          <span className={"status status-" + patient.status.toLowerCase()}>
+                          <span
+                            className={
+                              "status status-" + patient.status.toLowerCase()
+                            }
+                          >
                             {patient.status}
                           </span>
                         </td>
+
+                        <td>
+                          {patient.patientResponse ? (
+                            <strong>
+                              {patient.patientResponse === "Coming"
+                                ? "✅ I'm Coming"
+                                : "❌ I'm Not Coming"}
+                            </strong>
+                          ) : patient.status === "Called" ? (
+                            "Waiting for response"
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+
                         <td>
                           {patient.status === "Waiting" && (
                             <button
                               className="small-button"
-                              onClick={() => updateStatus(patient.id, "Called")}
+                              onClick={() =>
+                                updateStatus(patient.id, "Called")
+                              }
                             >
                               Call
                             </button>
                           )}
+
                           {patient.status === "Called" && (
                             <button
                               className="small-button complete-button"
-                              onClick={() => updateStatus(patient.id, "Completed")}
+                              onClick={() =>
+                                updateStatus(patient.id, "Completed")
+                              }
                             >
                               Complete
                             </button>
                           )}
+
                           {patient.status === "Completed" && "Finished"}
                         </td>
                       </tr>
                     ))}
+
+                    {!queueLoading &&
+                      !queueError &&
+                      sortedPatients.length === 0 && (
+                        <tr>
+                          <td colSpan="6">
+                            No patients have registered yet.
+                          </td>
+                        </tr>
+                      )}
                   </tbody>
                 </table>
               </div>
@@ -689,6 +933,7 @@ function App() {
             <section className="department-admin-grid">
               {departments.map((item) => {
                 const Icon = item.icon;
+
                 const count = patients.filter(
                   (patient) =>
                     patient.department === item.name &&
@@ -696,11 +941,18 @@ function App() {
                 ).length;
 
                 return (
-                  <div className="panel department-admin-card" key={item.code}>
-                    <div className="department-icon"><Icon size={22} /></div>
+                  <div
+                    className="panel department-admin-card"
+                    key={item.code}
+                  >
+                    <div className="department-icon">
+                      <Icon size={22} />
+                    </div>
+
                     <h3>{item.name}</h3>
                     <strong>{count}</strong>
                     <p>patients waiting</p>
+
                     <button
                       className="secondary-button"
                       onClick={() => callNext(item.name)}
@@ -713,7 +965,10 @@ function App() {
             </section>
 
             <div className="staff-logout-section">
-              <button className="secondary-button" onClick={handleStaffLogout}>
+              <button
+                className="secondary-button"
+                onClick={handleStaffLogout}
+              >
                 Log out
               </button>
             </div>

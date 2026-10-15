@@ -953,3 +953,73 @@ td:first-child strong {
     font-size: 26px;
   }
 }
+
+.doctor-calling-message {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid #86efac;
+  border-radius: 10px;
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 700;
+}
+
+.doctor-calling-message p {
+  margin: 6px 0 0;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+
+.doctor-calling-message {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #86efac;
+  border-radius: 12px;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.doctor-calling-message h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.doctor-calling-message p {
+  margin: 6px 0;
+}
+
+.patient-response-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.patient-response-buttons button {
+  padding: 11px 14px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.patient-response-buttons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.coming-button {
+  background: #166534;
+  color: white;
+}
+
+.not-coming-button {
+  background: #b91c1c;
+  color: white;
+}
+
+.patient-response {
+  margin-top: 12px;
+  font-weight: 600;
+}
