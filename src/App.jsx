@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 
 import {
@@ -70,7 +69,6 @@ function App() {
   const [latestToken, setLatestToken] = useState(null);
   const [notice, setNotice] = useState("");
   const [registering, setRegistering] = useState(false);
-  const [responding, setResponding] = useState(false);
 
   // Staff authentication
   useEffect(() => {
@@ -139,7 +137,7 @@ function App() {
     return unsubscribe;
   }, []);
 
-  // Live queue listener
+  // Load queue data for the current page
   useEffect(() => {
     if (!authReady) return;
 
@@ -184,7 +182,6 @@ function App() {
               )?.name || data.department,
             token: data.token,
             status: data.status,
-            patientResponse: data.patientResponse || "",
             createdAt,
             time: createdAt
               ? createdAt.toLocaleTimeString([], {
@@ -324,6 +321,7 @@ function App() {
         name: name.trim(),
         department,
         token,
+        status: "Waiting",
       });
 
       setName("");
@@ -344,50 +342,6 @@ function App() {
     }
   }
 
-  // Patient responds when the doctor calls
-  async function respondToDoctor(response) {
-    if (!patientAuthReady || !patientAuth.currentUser) {
-      setNotice("Patient connection is not ready. Please try again.");
-      return;
-    }
-
-    if (!["Coming", "Not Coming"].includes(response)) return;
-    if (!latestToken || responding) return;
-
-    const currentPatient = patients.find(
-      (patient) => patient.id === latestToken.id
-    );
-
-    if (!currentPatient || currentPatient.status !== "Called") {
-      setNotice("Your token is not currently being called.");
-      return;
-    }
-
-    if (currentPatient.patientResponse) {
-      setNotice("You have already submitted your response.");
-      return;
-    }
-
-    setResponding(true);
-
-    try {
-      await updateDoc(
-        doc(patientDb, "registrations", latestToken.id),
-        { patientResponse: response }
-      );
-
-      setNotice("Your response has been sent to the staff.");
-    } catch (error) {
-      console.error("Patient response failed:", error);
-      setNotice(
-        "Could not send your response. Check Firestore rules."
-      );
-    } finally {
-      setResponding(false);
-    }
-  }
-
-  // Staff changes patient status
   async function updateStatus(id, status) {
     if (!staffVerified) {
       setNotice("Only authorized staff can update queue status.");
@@ -397,14 +351,7 @@ function App() {
     if (!["Waiting", "Called", "Completed"].includes(status)) return;
 
     try {
-      const changes = { status };
-
-      // Reset the previous response when the patient is called again.
-      if (status === "Called") {
-        changes.patientResponse = null;
-      }
-
-      await updateDoc(doc(db, "registrations", id), changes);
+      await updateDoc(doc(db, "registrations", id), { status });
       setNotice("Queue status updated to " + status + ".");
     } catch (error) {
       console.error("Status update failed:", error);
@@ -435,6 +382,7 @@ function App() {
     (patient) => patient.status === "Completed"
   );
 
+  // Find the latest token's current status from the live Firestore data.
   const latestTokenPatient = latestToken
     ? patients.find((patient) => patient.id === latestToken.id)
     : null;
@@ -681,53 +629,14 @@ function App() {
                       {latestToken.department}.
                     </p>
 
+                    {/* Doctor calling notification */}
                     {latestTokenPatient?.status === "Called" && (
                       <div
                         className="doctor-calling-message"
                         role="alert"
                       >
-                        <h3>🔔 Doctor is calling you!</h3>
+                        🔔 Doctor is calling you!
                         <p>Please proceed to the doctor's room.</p>
-
-                        {latestTokenPatient.patientResponse ? (
-                          <p className="patient-response">
-                            Your response:{" "}
-                            {latestTokenPatient.patientResponse === "Coming"
-                              ? "I'm Coming"
-                              : "I'm Not Coming"}
-                          </p>
-                        ) : (
-                          <div className="patient-response-buttons">
-                            <button
-                              type="button"
-                              className="coming-button"
-                              disabled={responding}
-                              onClick={() => respondToDoctor("Coming")}
-                            >
-                              {responding
-                                ? "Sending..."
-                                : "✅ I'm Coming"}
-                            </button>
-
-                            <button
-                              type="button"
-                              className="not-coming-button"
-                              disabled={responding}
-                              onClick={() => respondToDoctor("Not Coming")}
-                            >
-                              {responding
-                                ? "Sending..."
-                                : "❌ I'm Not Coming"}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {latestTokenPatient?.status === "Completed" && (
-                      <div className="patient-response">
-                        <CheckCircle size={16} />
-                        Your consultation is marked as completed.
                       </div>
                     )}
 
@@ -846,7 +755,6 @@ function App() {
                       <th>Department</th>
                       <th>Time</th>
                       <th>Status</th>
-                      <th>Patient response</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -872,20 +780,6 @@ function App() {
                           >
                             {patient.status}
                           </span>
-                        </td>
-
-                        <td>
-                          {patient.patientResponse ? (
-                            <strong>
-                              {patient.patientResponse === "Coming"
-                                ? "✅ I'm Coming"
-                                : "❌ I'm Not Coming"}
-                            </strong>
-                          ) : patient.status === "Called" ? (
-                            "Waiting for response"
-                          ) : (
-                            "—"
-                          )}
                         </td>
 
                         <td>
@@ -920,7 +814,7 @@ function App() {
                       !queueError &&
                       sortedPatients.length === 0 && (
                         <tr>
-                          <td colSpan="6">
+                          <td colSpan="5">
                             No patients have registered yet.
                           </td>
                         </tr>
@@ -985,3 +879,4 @@ function App() {
 }
 
 export default App;
+                                  
