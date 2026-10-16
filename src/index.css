@@ -1032,3 +1032,324 @@ td:first-child strong {
     font-size: 11px;
   }
 }
+
+
+
+.department-called-patients {
+  width: 100%;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.department-called-patients h4 {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.called-patient-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.called-patient-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.called-patient-info span {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.department-called-patients .complete-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.no-called-patient {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.department-admin-card > .secondary-button {
+  margin-top: 8px;
+}
+
+.department-admin-card button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (max-width: 480px) {
+  .called-patient-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+
+
+/* ================================
+   DEPARTMENT DASHBOARD CARDS
+================================ */
+
+.department-admin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+  margin-top: 28px;
+  align-items: start;
+}
+
+.department-admin-card {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid #e5eaf2;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 5px 20px rgba(31, 55, 90, 0.06);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.department-admin-card:hover {
+  box-shadow: 0 10px 28px rgba(31, 55, 90, 0.1);
+  transform: translateY(-2px);
+}
+
+.department-admin-card > .department-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: #edf5ff;
+  color: #2563eb;
+}
+
+.department-admin-card h3 {
+  margin: 0 0 12px;
+  color: #172b4d;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.department-admin-card > strong {
+  display: block;
+  margin-bottom: 2px;
+  color: #172b4d;
+  font-size: 34px;
+  line-height: 1.2;
+}
+
+.department-admin-card > p {
+  margin: 4px 0 18px;
+  color: #718096;
+  font-size: 13px;
+}
+
+/* Call next patient button */
+
+.department-admin-card > .secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 11px 14px;
+  border: 1px solid #d8e5f8;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.department-admin-card > .secondary-button:hover:not(:disabled) {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.department-admin-card button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ================================
+   CALLED PATIENT SECTION
+================================ */
+
+.department-called-patients {
+  width: 100%;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid #e8edf4;
+}
+
+.department-called-patients h4 {
+  margin: 0 0 14px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* Individual called patient */
+
+.called-patient-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid #dcefe5;
+  border-radius: 12px;
+  background: #f6fcf8;
+  box-sizing: border-box;
+}
+
+.called-patient-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.called-patient-info strong {
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.called-patient-info > span:not(.status) {
+  color: #64748b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Called status badge */
+
+.called-patient-info .status.status-called {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 20px;
+  background: #fff4d6;
+  color: #925f00;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ================================
+   COMPLETE BUTTON
+================================ */
+
+.department-called-patients .complete-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid #15803d;
+  border-radius: 9px;
+  background: #16a34a;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(22, 163, 74, 0.15);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.department-called-patients .complete-button:hover:not(:disabled) {
+  background: #15803d;
+  transform: translateY(-1px);
+}
+
+.department-called-patients .complete-button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.department-called-patients .complete-button:disabled {
+  background: #86c99c;
+  border-color: #86c99c;
+  color: #ffffff;
+  cursor: wait;
+  opacity: 0.85;
+}
+
+/* Empty treatment state */
+
+.department-called-patients .no-called-patient {
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed #d7dee8;
+  border-radius: 10px;
+  background: #fafcff;
+  color: #8490a2;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ================================
+   RESPONSIVE LAYOUT
+================================ */
+
+@media (max-width: 1000px) {
+  .department-admin-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+}
+
+@media (max-width: 600px) {
+  .department-admin-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    margin-top: 20px;
+  }
+
+  .department-admin-card {
+    padding: 20px;
+    border-radius: 15px;
+  }
+
+  .called-patient-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .department-called-patients .complete-button {
+    width: 100%;
+    min-height: 42px;
+  }
+}
