@@ -442,6 +442,20 @@ function App() {
     (patient) => patient.status === "Completed"
   );
 
+  // Calculate waiting counts separately for each department.
+  const departmentWaitingCounts = departments.reduce(
+    (counts, item) => {
+      counts[item.name] = patients.filter(
+        (patient) =>
+          patient.department === item.name &&
+          patient.status === "Waiting"
+      ).length;
+
+      return counts;
+    },
+    {}
+  );
+
   // Find the latest token's current status from live Firestore data.
   const latestTokenPatient = latestToken
     ? patients.find((patient) => patient.id === latestToken.id)
@@ -699,12 +713,19 @@ function App() {
 
                     <div className="token-details">
                       <span>
-                        <Users size={15} /> {waitingPatients.length} waiting
+                        <Users size={15} />{" "}
+                        {departmentWaitingCounts[latestToken.department] || 0}{" "}
+                        waiting in your department
                       </span>
 
                       <span>
                         <Clock size={15} /> Estimated wait:{" "}
-                        {Math.max(0, waitingPatients.length - 1) * 10} min
+                        {Math.max(
+                          0,
+                          (departmentWaitingCounts[latestToken.department] || 0) -
+                            1
+                        ) * 10}{" "}
+                        min
                       </span>
                     </div>
                   </div>
@@ -715,7 +736,7 @@ function App() {
                 <div className="panel-heading">
                   <div>
                     <span className="mini-label">QUEUE OVERVIEW</span>
-                    <h3>Your queue activity</h3>
+                    <h3>Department waiting counts</h3>
                   </div>
 
                   <span className="live-pill">
@@ -725,12 +746,7 @@ function App() {
 
                 {departments.map((item) => {
                   const Icon = item.icon;
-
-                  const count = patients.filter(
-                    (patient) =>
-                      patient.department === item.name &&
-                      patient.status === "Waiting"
-                  ).length;
+                  const count = departmentWaitingCounts[item.name] || 0;
 
                   return (
                     <div className="department-row" key={item.code}>
@@ -740,7 +756,7 @@ function App() {
 
                       <div className="department-info">
                         <strong>{item.name}</strong>
-                        <span>{count} of your registrations waiting</span>
+                        <span>Patients waiting</span>
                       </div>
 
                       <div className="queue-count">{count}</div>
@@ -899,12 +915,7 @@ function App() {
             <section className="department-admin-grid">
               {departments.map((item) => {
                 const Icon = item.icon;
-
-                const count = patients.filter(
-                  (patient) =>
-                    patient.department === item.name &&
-                    patient.status === "Waiting"
-                ).length;
+                const count = departmentWaitingCounts[item.name] || 0;
 
                 return (
                   <div
