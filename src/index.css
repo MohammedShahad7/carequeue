@@ -1353,3 +1353,147 @@ td:first-child strong {
     min-height: 42px;
   }
 }
+
+
+
+
+/* Smart Turn Notification */
+
+.notification-settings {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+  padding: 17px;
+  border: 1px solid #e2eaf3;
+  border-radius: 12px;
+  background: #f9fbff;
+}
+
+.notification-settings h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: #172e4a;
+  font-size: 15px;
+}
+
+.notification-settings > p {
+  margin: 0 0 4px;
+  color: #78889b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.notification-settings .secondary-button {
+  min-height: 40px;
+  padding: 10px;
+}
+
+.notification-settings .secondary-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.notification-help {
+  color: #b42318 !important;
+  font-size: 11px !important;
+}
+
+.doctor-calling-message {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #86efac;
+  border-radius: 12px;
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 700;
+  animation: notification-appear 0.3s ease-in-out;
+}
+
+.doctor-calling-message p {
+  margin: 8px 0 0;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.waiting-notice,
+.completed-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.waiting-notice {
+  background: #fff4df;
+  color: #91651b;
+}
+
+.completed-notice {
+  background: #e7f8ef;
+  color: #159762;
+}
+
+@keyframes notification-appear {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+
+.waiting-time-card {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid #dbe7f2;
+  border-radius: 14px;
+  background: #f6faff;
+}
+
+.waiting-time-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: #183653;
+  font-size: 15px;
+}
+
+.waiting-time-value {
+  margin-bottom: 16px;
+  color: #16845b;
+  font-size: 30px;
+  font-weight: 750;
+}
+
+.waiting-time-detail {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid #e1eaf3;
+  font-size: 13px;
+}
+
+.waiting-time-detail span {
+  color: #718096;
+}
+
+.waiting-time-card > p {
+  margin-top: 12px;
+  color: #718096;
+  font-size: 11px;
+  line-height: 1.6;
+}

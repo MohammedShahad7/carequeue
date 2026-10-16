@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   onAuthStateChanged,
@@ -22,12 +22,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 
-import {
-  auth,
-  db,
-  patientAuth,
-  patientDb,
-} from "./firebase";
+import { auth, db, patientAuth, patientDb } from "./firebase";
 
 import {
   Activity,
@@ -42,6 +37,9 @@ import {
   Users,
   UserRound,
   Trash2,
+  BellRing,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 import "./index.css";
@@ -51,6 +49,10 @@ const departments = [
   { name: "Pediatrics", code: "PD", icon: HeartPulse },
   { name: "Orthopedics", code: "OR", icon: Activity },
 ];
+
+const TOKEN_STORAGE_KEY = "carequeue_latest_token";
+const SOUND_STORAGE_KEY = "carequeue_sound_enabled";
+const AVERAGE_CONSULTATION_MINUTES = 10;
 
 function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -72,11 +74,48 @@ function App() {
 
   const [name, setName] = useState("");
   const [department, setDepartment] = useState("General Medicine");
-  const [latestToken, setLatestToken] = useState(null);
+
+  const [latestToken, setLatestToken] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(TOKEN_STORAGE_KEY)) || null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [soundEnabled, setSoundEnabled] = useState(
+    () => localStorage.getItem(SOUND_STORAGE_KEY) === "true"
+  );
+
   const [notice, setNotice] = useState("");
   const [registering, setRegistering] = useState(false);
 
-  // Staff authentication
+  const [notificationPermission, setNotificationPermission] =
+    useState(() =>
+      "Notification" in window
+        ? Notification.permission
+        : "unsupported"
+    );
+
+  const previousStatusRef = useRef({});
+  const audioContextRef = useRef(null);
+
+  useEffect(() => {
+    if (latestToken) {
+      localStorage.setItem(
+        TOKEN_STORAGE_KEY,
+        JSON.stringify(latestToken)
+      );
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  }, [latestToken]);
+
+  useEffect(() => {
+    localStorage.setItem(SOUND_STORAGE_KEY, String(soundEnabled));
+  }, [soundEnabled]);
+
+  // Verify staff access using the staff collection.
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setStaffVerified(false);
@@ -87,13 +126,12 @@ function App() {
       }
 
       try {
-        const staffRef = doc(db, "staff", user.uid);
-        const staffSnapshot = await getDoc(staffRef);
+        const snapshot = await getDoc(doc(db, "staff", user.uid));
 
         const authorized =
-          staffSnapshot.exists() &&
-          staffSnapshot.data().role === "staff" &&
-          staffSnapshot.data().active === true;
+          snapshot.exists() &&
+          snapshot.data().role === "staff" &&
+          snapshot.data().active === true;
 
         setStaffVerified(authorized);
 
@@ -107,10 +145,13 @@ function App() {
         }
       } catch (error) {
         console.error("Staff verification failed:", error);
-        setStaffError(
-          "Could not verify staff permissions. Check Firestore rules."
-        );
-        await signOut(auth);
+        setStaffError("Could not verify staff permissions.");
+
+        try {
+          await signOut(auth);
+        } catch (logoutError) {
+          console.error(logoutError);
+        }
       } finally {
         setAuthReady(true);
       }
@@ -119,7 +160,7 @@ function App() {
     return unsubscribe;
   }, []);
 
-  // Patient anonymous authentication
+  // Anonymous authentication for patients.
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       patientAuth,
@@ -146,7 +187,7 @@ function App() {
     return unsubscribe;
   }, []);
 
-  // Load queue data for the current page
+  // Staff sees the full queue. Patients see only their own registrations.
   useEffect(() => {
     if (!authReady) return;
 
@@ -165,11 +206,7 @@ function App() {
 
       queueQuery = query(
         collection(patientDb, "registrations"),
-        where(
-          "ownerUid",
-          "==",
-          patientAuth.currentUser.uid
-        )
+        where("ownerUid", "==", patientAuth.currentUser.uid)
       );
     }
 
@@ -190,11 +227,12 @@ function App() {
             id: item.id,
             name: data.patientName,
             department:
-              departments.find(
-                (entry) => entry.code === data.department
-              )?.name || data.department,
+              departments.find((d) => d.code === data.department)?.name ||
+              data.department,
+            departmentCode: data.department,
             token: data.token,
             status: data.status,
+            ownerUid: data.ownerUid,
             createdAt,
             time: createdAt
               ? createdAt.toLocaleTimeString([], {
@@ -211,7 +249,7 @@ function App() {
       (error) => {
         console.error("Queue loading failed:", error);
         setQueueError(
-          "Unable to load the queue. Check Firestore permissions and connection."
+          "Unable to load queue. Check Firestore permissions and connection."
         );
         setQueueLoading(false);
       }
@@ -220,18 +258,113 @@ function App() {
     return unsubscribe;
   }, [authReady, patientAuthReady, page, staffVerified]);
 
-  // Sort patients by registration time (FIFO)
   const sortedPatients = [...patients].sort((a, b) => {
-    const timeA = a.createdAt
-      ? a.createdAt.getTime()
-      : Number.MAX_SAFE_INTEGER;
-
-    const timeB = b.createdAt
-      ? b.createdAt.getTime()
-      : Number.MAX_SAFE_INTEGER;
-
-    return timeA - timeB;
+    const aTime = a.createdAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    const bTime = b.createdAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    return aTime - bTime;
   });
+
+  const latestTokenPatient = latestToken
+    ? patients.find((patient) => patient.id === latestToken.id)
+    : null;
+
+  // Notify the patient when their status changes to Called.
+  useEffect(() => {
+    if (page !== "patient" || !latestTokenPatient) return;
+
+    const patient = latestTokenPatient;
+    const previousStatus = previousStatusRef.current[patient.id];
+
+    if (
+      patient.status === "Called" &&
+      previousStatus &&
+      previousStatus !== "Called"
+    ) {
+      if (soundEnabled) playNotificationSound();
+
+      if (
+        "Notification" in window &&
+        Notification.permission === "granted"
+      ) {
+        try {
+          new Notification("CareQueue: Your turn!", {
+            body: `Token ${patient.token}: Please proceed to the doctor's room.`,
+            tag: `carequeue-${patient.id}`,
+          });
+        } catch (error) {
+          console.warn("Browser notification failed:", error);
+        }
+      }
+    }
+
+    previousStatusRef.current[patient.id] = patient.status;
+  }, [page, latestTokenPatient, soundEnabled]);
+
+  function playNotificationSound() {
+    try {
+      const AudioContextClass =
+        window.AudioContext || window.webkitAudioContext;
+
+      if (!AudioContextClass) return;
+
+      const context =
+        audioContextRef.current || new AudioContextClass();
+
+      audioContextRef.current = context;
+
+      if (context.state === "suspended") {
+        context.resume().catch(console.warn);
+      }
+
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, context.currentTime);
+      oscillator.frequency.setValueAtTime(
+        660,
+        context.currentTime + 0.18
+      );
+
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(
+        0.18,
+        context.currentTime + 0.03
+      );
+      gain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        context.currentTime + 0.45
+      );
+
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.46);
+    } catch (error) {
+      console.warn("Sound notification failed:", error);
+    }
+  }
+
+  async function enableBrowserNotifications() {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+
+      setNotice(
+        permission === "granted"
+          ? "Browser notifications enabled."
+          : "Notifications not enabled. You can still see alerts in CareQueue."
+      );
+    } catch (error) {
+      console.error(error);
+      setNotice("Could not enable browser notifications.");
+    }
+  }
 
   function openStaffPortal() {
     setPage("admin");
@@ -254,23 +387,21 @@ function App() {
     } catch (error) {
       console.error("Staff login failed:", error);
 
-      if (error.code === "auth/invalid-credential") {
-        setStaffError("Incorrect email or password.");
-      } else if (error.code === "auth/too-many-requests") {
-        setStaffError(
-          "Too many attempts. Please wait and try again."
-        );
-      } else {
-        setStaffError(error.message || "Staff login failed.");
-      }
+      setStaffError(
+        error.code === "auth/invalid-credential" ||
+        error.code === "auth/wrong-password" ||
+        error.code === "auth/user-not-found"
+          ? "Incorrect email or password."
+          : error.code === "auth/too-many-requests"
+          ? "Too many attempts. Please wait and try again."
+          : error.message || "Staff login failed."
+      );
     } finally {
       setStaffLoading(false);
     }
   }
 
   async function handleStaffLogout() {
-    setStaffError("");
-
     try {
       await signOut(auth);
       setStaffVerified(false);
@@ -278,12 +409,11 @@ function App() {
       setPage("patient");
       setNotice("");
     } catch (error) {
-      console.error("Staff logout failed:", error);
+      console.error(error);
       setStaffError("Logout failed. Please refresh the page.");
     }
   }
 
-  // Register a patient
   async function registerPatient(event) {
     event.preventDefault();
 
@@ -293,9 +423,7 @@ function App() {
     }
 
     if (!patientAuthReady || !patientAuth.currentUser) {
-      setNotice(
-        "Patient sign-in is still loading. Please try again."
-      );
+      setNotice("Patient sign-in is still loading. Please try again.");
       return;
     }
 
@@ -313,10 +441,7 @@ function App() {
 
     try {
       const user = patientAuth.currentUser;
-
-      const registrationRef = doc(
-        collection(patientDb, "registrations")
-      );
+      const registrationRef = doc(collection(patientDb, "registrations"));
 
       const token =
         selectedDepartment.code +
@@ -332,21 +457,21 @@ function App() {
         createdAt: serverTimestamp(),
       });
 
-      setLatestToken({
+      const newToken = {
         id: registrationRef.id,
         name: name.trim(),
         department,
+        departmentCode: selectedDepartment.code,
         token,
         status: "Waiting",
-      });
+      };
 
+      setLatestToken(newToken);
+      previousStatusRef.current[registrationRef.id] = "Waiting";
       setName("");
-      setNotice(
-        "Registration successful! Your token is " + token + "."
-      );
+      setNotice(`Registration successful! Your token is ${token}.`);
     } catch (error) {
       console.error("Registration failed:", error);
-
       setNotice(
         "Registration failed: " +
           (error.code === "permission-denied"
@@ -358,34 +483,23 @@ function App() {
     }
   }
 
-  // Update a patient's status
   async function updateStatus(id, status) {
     if (!staffVerified) {
-      setNotice(
-        "Only authorized staff can update queue status."
-      );
+      setNotice("Only authorized staff can update queue status.");
       return;
     }
 
-    if (!["Waiting", "Called", "Completed"].includes(status)) {
-      return;
-    }
-
+    if (!["Waiting", "Called", "Completed"].includes(status)) return;
     if (updatingPatients.includes(id)) return;
 
     setUpdatingPatients((current) => [...current, id]);
 
     try {
-      await updateDoc(doc(db, "registrations", id), {
-        status,
-      });
-
+      await updateDoc(doc(db, "registrations", id), { status });
       setNotice("Queue status updated to " + status + ".");
     } catch (error) {
       console.error("Status update failed:", error);
-      setNotice(
-        "Could not update status. Check Firestore rules."
-      );
+      setNotice("Could not update status. Check Firestore rules.");
     } finally {
       setUpdatingPatients((current) =>
         current.filter((patientId) => patientId !== id)
@@ -393,66 +507,47 @@ function App() {
     }
   }
 
-  // Clear all patient registrations after staff confirmation
   async function clearPatientQueue() {
     if (!staffVerified || clearingQueue) {
       setNotice("Only authorized staff can clear the queue.");
       return;
     }
 
-    const confirmed = window.confirm(
-      "Delete ALL patient registrations, including completed records? This cannot be undone."
-    );
-
-    if (!confirmed) return;
+    if (
+      !window.confirm(
+        "Delete ALL patient registrations, including completed records? This cannot be undone."
+      )
+    ) {
+      return;
+    }
 
     setClearingQueue(true);
-    setNotice("");
 
     try {
-      const snapshot = await getDocs(
-        collection(db, "registrations")
-      );
+      const snapshot = await getDocs(collection(db, "registrations"));
 
-      if (snapshot.empty) {
-        setNotice("The patient queue is already empty.");
-        return;
-      }
-
-      const documents = snapshot.docs;
-
-      for (let i = 0; i < documents.length; i += 400) {
+      for (let i = 0; i < snapshot.docs.length; i += 400) {
         const batch = writeBatch(db);
 
-        documents.slice(i, i + 400).forEach((patientDoc) => {
+        snapshot.docs.slice(i, i + 400).forEach((patientDoc) => {
           batch.delete(patientDoc.ref);
         });
 
         await batch.commit();
       }
 
-      setNotice(
-        `Queue cleared. Deleted ${snapshot.size} registration(s).`
-      );
+      setLatestToken(null);
+      setNotice(`Queue cleared. Deleted ${snapshot.size} registration(s).`);
     } catch (error) {
-      console.error("Clearing patient queue failed:", error);
-
-      setNotice(
-        error.code === "permission-denied"
-          ? "Deletion blocked by Firestore rules. Check the staff delete permission."
-          : "Could not clear the entire queue. Some records may already have been deleted; refresh and check the queue."
-      );
+      console.error("Clear queue failed:", error);
+      setNotice("Could not clear the queue. Check Firestore rules.");
     } finally {
       setClearingQueue(false);
     }
   }
 
-  // Call the earliest waiting patient in the selected department
   async function callNext(departmentName) {
-    if (!staffVerified) {
-      setNotice("Only authorized staff can call patients.");
-      return;
-    }
+    if (!staffVerified) return;
 
     const nextPatient = sortedPatients.find(
       (patient) =>
@@ -461,9 +556,7 @@ function App() {
     );
 
     if (!nextPatient) {
-      setNotice(
-        "No waiting patients in " + departmentName + "."
-      );
+      setNotice("No waiting patients in " + departmentName + ".");
       return;
     }
 
@@ -478,24 +571,35 @@ function App() {
     (patient) => patient.status === "Completed"
   );
 
-  // Waiting counts for each department
-  const departmentWaitingCounts = departments.reduce(
-    (counts, item) => {
-      counts[item.name] = patients.filter(
+  const departmentWaitingCounts = departments.reduce((counts, item) => {
+    counts[item.name] = patients.filter(
+      (patient) =>
+        patient.department === item.name &&
+        patient.status === "Waiting"
+    ).length;
+
+    return counts;
+  }, {});
+
+  // Approximate estimate using the registrations visible to this view.
+  // Accurate patient-side estimates require a shared, privacy-safe queue summary.
+  const patientsAhead = latestTokenPatient?.status === "Waiting"
+    ? sortedPatients.filter(
         (patient) =>
-          patient.department === item.name &&
-          patient.status === "Waiting"
-      ).length;
+          patient.department === latestTokenPatient.department &&
+          patient.status === "Waiting" &&
+          patient.createdAt &&
+          latestTokenPatient.createdAt &&
+          patient.createdAt < latestTokenPatient.createdAt
+      ).length
+    : 0;
 
-      return counts;
-    },
-    {}
+  const estimatedWaitMinutes =
+    patientsAhead * AVERAGE_CONSULTATION_MINUTES;
+
+  const estimatedCallTime = new Date(
+    Date.now() + estimatedWaitMinutes * 60 * 1000
   );
-
-  // Find latest token's live status
-  const latestTokenPatient = latestToken
-    ? patients.find((patient) => patient.id === latestToken.id)
-    : null;
 
   if (!authReady) {
     return (
@@ -520,7 +624,6 @@ function App() {
           <span className="brand-icon">
             <Hospital size={23} />
           </span>
-
           <span>
             Care<span className="brand-accent">Queue</span>
             <small>SMART HOSPITAL SYSTEM</small>
@@ -529,21 +632,14 @@ function App() {
 
         <nav className="nav-links">
           <button
-            className={
-              page === "patient" ? "nav-link active" : "nav-link"
-            }
-            onClick={() => {
-              setPage("patient");
-              setNotice("");
-            }}
+            className={page === "patient" ? "nav-link active" : "nav-link"}
+            onClick={() => setPage("patient")}
           >
             Patient Portal
           </button>
 
           <button
-            className={
-              page === "admin" ? "nav-link active" : "nav-link"
-            }
+            className={page === "admin" ? "nav-link active" : "nav-link"}
             onClick={openStaffPortal}
           >
             <LayoutDashboard size={16} />
@@ -552,7 +648,7 @@ function App() {
         </nav>
 
         <div className="system-status">
-          <span /> Demo Mode
+          <span /> Live Queue
         </div>
       </header>
 
@@ -569,35 +665,28 @@ function App() {
               </span>
 
               <h2>Welcome back</h2>
-
               <p className="staff-login-description">
                 Sign in to manage hospital queues and patient flow.
               </p>
 
               <form onSubmit={handleStaffLogin}>
                 <label htmlFor="staffEmail">Email address</label>
-
                 <input
                   id="staffEmail"
                   type="email"
                   value={staffEmail}
-                  onChange={(event) =>
-                    setStaffEmail(event.target.value)
-                  }
+                  onChange={(event) => setStaffEmail(event.target.value)}
                   placeholder="Enter your staff email"
                   autoComplete="username"
                   required
                 />
 
                 <label htmlFor="staffPassword">Password</label>
-
                 <input
                   id="staffPassword"
                   type="password"
                   value={staffPassword}
-                  onChange={(event) =>
-                    setStaffPassword(event.target.value)
-                  }
+                  onChange={(event) => setStaffPassword(event.target.value)}
                   placeholder="Enter your password"
                   autoComplete="current-password"
                   required
@@ -614,10 +703,7 @@ function App() {
                   className="staff-login-button"
                   disabled={staffLoading}
                 >
-                  {staffLoading
-                    ? "Verifying account..."
-                    : "Sign in to dashboard"}
-
+                  {staffLoading ? "Verifying..." : "Sign in to dashboard"}
                   {!staffLoading && <ArrowRight size={18} />}
                 </button>
               </form>
@@ -644,17 +730,13 @@ function App() {
                 </h1>
 
                 <p>
-                  Join your hospital queue digitally and track your
-                  token without standing in line.
+                  Join your hospital queue digitally and track your token.
                 </p>
               </div>
 
               <div className="welcome-art">
                 <Hospital size={88} strokeWidth={1.1} />
-                <HeartPulse
-                  className="floating-heart"
-                  size={34}
-                />
+                <HeartPulse className="floating-heart" size={34} />
               </div>
             </section>
 
@@ -663,10 +745,7 @@ function App() {
                 <h2>Get your token</h2>
                 <p>Enter your name and select a department.</p>
               </div>
-
-              <span className="step-label">
-                STEP 01 / REGISTER
-              </span>
+              <span className="step-label">STEP 01 / REGISTER</span>
             </div>
 
             <div className="patient-layout">
@@ -676,13 +755,10 @@ function App() {
 
                   <div className="input-wrap">
                     <UserRound size={18} />
-
                     <input
                       id="patientName"
                       value={name}
-                      onChange={(event) =>
-                        setName(event.target.value)
-                      }
+                      onChange={(event) => setName(event.target.value)}
                       placeholder="Enter patient name"
                       required
                     />
@@ -719,16 +795,8 @@ function App() {
                     disabled={registering || !patientAuthReady}
                   >
                     <Plus size={18} />
-
-                    {registering
-                      ? "Registering..."
-                      : !patientAuthReady
-                      ? "Connecting..."
-                      : "Get my token"}
-
-                    {!registering && patientAuthReady && (
-                      <ArrowRight size={17} />
-                    )}
+                    {registering ? "Registering..." : "Get my token"}
+                    {!registering && <ArrowRight size={17} />}
                   </button>
 
                   <p className="privacy-note">
@@ -737,101 +805,158 @@ function App() {
                   </p>
                 </form>
 
+                <div className="notification-settings">
+                  <h3>
+                    <BellRing size={18} />
+                    Smart Turn Notifications
+                  </h3>
+
+                  <p>Get an alert when staff calls your token.</p>
+
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setSoundEnabled((value) => !value)}
+                  >
+                    {soundEnabled ? (
+                      <Volume2 size={16} />
+                    ) : (
+                      <VolumeX size={16} />
+                    )}
+                    {soundEnabled ? "Sound enabled" : "Enable sound"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="secondary-button notification-permission-button"
+                    onClick={enableBrowserNotifications}
+                    disabled={notificationPermission === "granted"}
+                  >
+                    <BellRing size={16} />
+                    {notificationPermission === "granted"
+                      ? "Browser notifications enabled"
+                      : notificationPermission === "denied"
+                      ? "Allow notifications in browser settings"
+                      : notificationPermission === "unsupported"
+                      ? "Browser notifications unsupported"
+                      : "Enable browser notifications"}
+                  </button>
+
+                  {notificationPermission === "denied" && (
+                    <p className="notification-help">
+                      Notifications are blocked. Change this website's
+                      notification permission in your browser settings.
+                    </p>
+                  )}
+                </div>
+
                 {authError && (
-                  <div className="notice" role="alert">
-                    {authError}
-                  </div>
+                  <div className="notice" role="alert">{authError}</div>
                 )}
 
                 {notice && <div className="notice">{notice}</div>}
 
-                {latestToken &&
-                  latestTokenPatient?.status !== "Completed" && (
-                    <div className="token-result">
-                      <div className="token-success">
+                {latestToken && (
+                  <div className="token-result">
+                    <div className="token-success">
+                      <CheckCircle size={18} />
+                      Your saved token
+                    </div>
+
+                    <div className="token-number">{latestToken.token}</div>
+
+                    <p>
+                      {latestToken.name}, your department is{" "}
+                      {latestToken.department}.
+                    </p>
+
+                    {latestTokenPatient?.status === "Called" && (
+                      <div className="doctor-calling-message" role="alert">
+                        🔔 Doctor is calling you!
+                        <p>Please proceed to the doctor's room.</p>
+                      </div>
+                    )}
+
+                    {latestTokenPatient?.status === "Completed" && (
+                      <div className="completed-notice">
                         <CheckCircle size={18} />
-                        Token generated successfully
+                        Your visit has been marked completed.
                       </div>
+                    )}
 
-                      <div className="token-number">
-                        {latestToken.token}
-                      </div>
+                    {latestTokenPatient?.status === "Waiting" && (
+                      <>
+                        <div className="waiting-notice">
+                          <Clock size={17} />
+                          Your token is waiting to be called.
+                        </div>
 
-                      <p>
-                        {latestToken.name}, your department is{" "}
-                        {latestToken.department}.
-                      </p>
+                        <div className="waiting-time-card">
+                          <h3><Clock size={18} /> Estimated Waiting Time</h3>
 
-                      {latestTokenPatient?.status === "Called" && (
-                        <div
-                          className="doctor-calling-message"
-                          role="alert"
-                        >
-                          🔔 Doctor is calling you!
+                          <div className="waiting-time-value">
+                            {estimatedWaitMinutes} minutes
+                          </div>
+
+                          <div className="waiting-time-detail">
+                            <span>Patients ahead</span>
+                            <strong>{patientsAhead}</strong>
+                          </div>
+
+                          <div className="waiting-time-detail">
+                            <span>Estimated call time</span>
+                            <strong>
+                              {estimatedCallTime.toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </strong>
+                          </div>
+
                           <p>
-                            Please proceed to the doctor's room.
+                            Based on an average of{" "}
+                            {AVERAGE_CONSULTATION_MINUTES} minutes per patient.
+                            Actual waiting time may vary.
                           </p>
                         </div>
-                      )}
+                      </>
+                    )}
 
-                      <div className="token-details">
-                        <span>
-                          <Users size={15} />{" "}
-                          {departmentWaitingCounts[
-                            latestToken.department
-                          ] || 0}{" "}
-                          waiting in your department
-                        </span>
-
-                        <span>
-                          <Clock size={15} /> Estimated wait:{" "}
-                          {Math.max(
-                            0,
-                            (departmentWaitingCounts[
-                              latestToken.department
-                            ] || 0) - 1
-                          ) * 10}{" "}
-                          min
-                        </span>
-                      </div>
+                    <div className="token-details">
+                      <span>
+                        <Users size={15} />
+                        {departmentWaitingCounts[latestToken.department] || 0}{" "}
+                        waiting in your department
+                      </span>
                     </div>
-                  )}
+                  </div>
+                )}
               </section>
 
               <aside className="panel">
                 <div className="panel-heading">
                   <div>
-                    <span className="mini-label">
-                      QUEUE OVERVIEW
-                    </span>
+                    <span className="mini-label">QUEUE OVERVIEW</span>
                     <h3>Department waiting counts</h3>
                   </div>
-
-                  <span className="live-pill">
-                    <span /> DEMO
-                  </span>
+                  <span className="live-pill"><span /> LIVE</span>
                 </div>
 
                 {departments.map((item) => {
                   const Icon = item.icon;
-                  const count =
-                    departmentWaitingCounts[item.name] || 0;
 
                   return (
-                    <div
-                      className="department-row"
-                      key={item.code}
-                    >
+                    <div className="department-row" key={item.code}>
                       <div className="department-icon">
                         <Icon size={20} />
                       </div>
-
                       <div className="department-info">
                         <strong>{item.name}</strong>
-                        <span>Patients waiting</span>
+                        <span>Patients waiting in this view</span>
                       </div>
-
-                      <div className="queue-count">{count}</div>
+                      <div className="queue-count">
+                        {departmentWaitingCounts[item.name] || 0}
+                      </div>
                     </div>
                   );
                 })}
@@ -846,14 +971,9 @@ function App() {
                   <LayoutDashboard size={15} />
                   STAFF CONTROL CENTER
                 </div>
-
-                <h1>
-                  Queue <span>dashboard</span>
-                </h1>
-
+                <h1>Queue <span>dashboard</span></h1>
                 <p>Manage patient flow across departments.</p>
               </div>
-
               <div className="dashboard-date">
                 {new Date().toLocaleDateString()}
               </div>
@@ -865,13 +985,11 @@ function App() {
                 <span>Total patients</span>
                 <strong>{patients.length}</strong>
               </div>
-
               <div className="stat-card">
                 <Clock />
                 <span>Waiting now</span>
                 <strong>{waitingPatients.length}</strong>
               </div>
-
               <div className="stat-card">
                 <CheckCircle />
                 <span>Completed</span>
@@ -879,13 +997,10 @@ function App() {
               </div>
             </section>
 
-            {/* Main patient queue table */}
             <section className="panel table-panel">
               <div className="panel-heading">
                 <div>
-                  <span className="mini-label">
-                    PATIENT MANAGEMENT
-                  </span>
+                  <span className="mini-label">PATIENT MANAGEMENT</span>
                   <h3>Current queue</h3>
                 </div>
 
@@ -901,18 +1016,12 @@ function App() {
                   }
                 >
                   <Trash2 size={15} />
-                  {clearingQueue
-                    ? "Clearing..."
-                    : "Clear Queue"}
+                  {clearingQueue ? "Clearing..." : "Clear Queue"}
                 </button>
               </div>
 
               {notice && <div className="notice">{notice}</div>}
-
-              {queueLoading && (
-                <p>Loading queue from Firestore...</p>
-              )}
-
+              {queueLoading && <p>Loading queue...</p>}
               {queueError && <p role="alert">{queueError}</p>}
 
               <div className="table-scroll">
@@ -932,43 +1041,24 @@ function App() {
                       <tr key={patient.id}>
                         <td>
                           <strong>{patient.name}</strong>
-                          <span className="token-cell">
-                            {patient.token}
-                          </span>
+                          <span className="token-cell">{patient.token}</span>
                         </td>
-
                         <td>{patient.department}</td>
                         <td>{patient.time}</td>
-
                         <td>
-                          <span
-                            className={
-                              "status status-" +
-                              patient.status.toLowerCase()
-                            }
-                          >
+                          <span className={"status status-" + patient.status.toLowerCase()}>
                             {patient.status}
                           </span>
                         </td>
-
                         <td>
                           {patient.status === "Waiting" && (
                             <button
                               type="button"
                               className="small-button"
-                              disabled={updatingPatients.includes(
-                                patient.id
-                              )}
-                              onClick={() =>
-                                updateStatus(
-                                  patient.id,
-                                  "Called"
-                                )
-                              }
+                              disabled={updatingPatients.includes(patient.id)}
+                              onClick={() => updateStatus(patient.id, "Called")}
                             >
-                              {updatingPatients.includes(patient.id)
-                                ? "Updating..."
-                                : "Call"}
+                              {updatingPatients.includes(patient.id) ? "Updating..." : "Call"}
                             </button>
                           )}
 
@@ -976,86 +1066,56 @@ function App() {
                             <button
                               type="button"
                               className="small-button complete-button"
-                              disabled={updatingPatients.includes(
-                                patient.id
-                              )}
-                              onClick={() =>
-                                updateStatus(
-                                  patient.id,
-                                  "Completed"
-                                )
-                              }
+                              disabled={updatingPatients.includes(patient.id)}
+                              onClick={() => updateStatus(patient.id, "Completed")}
                             >
-                              {updatingPatients.includes(patient.id)
-                                ? "Updating..."
-                                : "Complete"}
+                              Complete
                             </button>
                           )}
 
-                          {patient.status === "Completed" &&
-                            "Finished"}
+                          {patient.status === "Completed" && "Finished"}
                         </td>
                       </tr>
                     ))}
 
-                    {!queueLoading &&
-                      !queueError &&
-                      sortedPatients.length === 0 && (
-                        <tr>
-                          <td colSpan="5">
-                            No patients have registered yet.
-                          </td>
-                        </tr>
-                      )}
+                    {!queueLoading && !queueError && sortedPatients.length === 0 && (
+                      <tr>
+                        <td colSpan="5">No patients have registered yet.</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
             </section>
 
-            {/* Department boxes with their own Complete buttons */}
             <section className="department-admin-grid">
               {departments.map((item) => {
                 const Icon = item.icon;
 
-                const waitingInDepartment =
-                  sortedPatients.filter(
-                    (patient) =>
-                      patient.department === item.name &&
-                      patient.status === "Waiting"
-                  );
+                const waitingInDepartment = sortedPatients.filter(
+                  (patient) =>
+                    patient.department === item.name &&
+                    patient.status === "Waiting"
+                );
 
-                const calledInDepartment =
-                  sortedPatients.filter(
-                    (patient) =>
-                      patient.department === item.name &&
-                      patient.status === "Called"
-                  );
+                const calledInDepartment = sortedPatients.filter(
+                  (patient) =>
+                    patient.department === item.name &&
+                    patient.status === "Called"
+                );
 
                 return (
-                  <div
-                    className="panel department-admin-card"
-                    key={item.code}
-                  >
-                    <div className="department-icon">
-                      <Icon size={22} />
-                    </div>
-
+                  <div className="panel department-admin-card" key={item.code}>
+                    <div className="department-icon"><Icon size={22} /></div>
                     <h3>{item.name}</h3>
-
-                    <strong>
-                      {waitingInDepartment.length}
-                    </strong>
-
+                    <strong>{waitingInDepartment.length}</strong>
                     <p>patients waiting</p>
 
                     <button
                       type="button"
                       className="secondary-button"
                       onClick={() => callNext(item.name)}
-                      disabled={
-                        !staffVerified ||
-                        waitingInDepartment.length === 0
-                      }
+                      disabled={!staffVerified || waitingInDepartment.length === 0}
                     >
                       Call next patient <ArrowRight size={15} />
                     </button>
@@ -1063,39 +1123,22 @@ function App() {
                     <div className="department-called-patients">
                       <h4>Patients being treated</h4>
 
-                      {calledInDepartment.length > 0 ? (
+                      {calledInDepartment.length ? (
                         calledInDepartment.map((patient) => (
-                          <div
-                            className="called-patient-item"
-                            key={patient.id}
-                          >
+                          <div className="called-patient-item" key={patient.id}>
                             <div className="called-patient-info">
                               <strong>{patient.name}</strong>
                               <span>{patient.token}</span>
-
-                              <span className="status status-called">
-                                Called
-                              </span>
+                              <span className="status status-called">Called</span>
                             </div>
 
                             <button
                               type="button"
                               className="small-button complete-button"
-                              disabled={updatingPatients.includes(
-                                patient.id
-                              )}
-                              onClick={() =>
-                                updateStatus(
-                                  patient.id,
-                                  "Completed"
-                                )
-                              }
+                              disabled={updatingPatients.includes(patient.id)}
+                              onClick={() => updateStatus(patient.id, "Completed")}
                             >
-                              <CheckCircle size={14} />
-
-                              {updatingPatients.includes(patient.id)
-                                ? "Updating..."
-                                : "Complete"}
+                              <CheckCircle size={14} /> Complete
                             </button>
                           </div>
                         ))
@@ -1125,7 +1168,7 @@ function App() {
 
       <footer className="footer">
         <strong>CareQueue</strong>
-        <span>Smart healthcare prototype</span>
+        <span>Smart Turn Notification · Healthcare prototype</span>
       </footer>
     </div>
   );
