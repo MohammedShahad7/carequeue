@@ -685,51 +685,53 @@ function App() {
 
                 {notice && <div className="notice">{notice}</div>}
 
-                {latestToken && (
-                  <div className="token-result">
-                    <div className="token-success">
-                      <CheckCircle size={18} />
-                      Token generated successfully
-                    </div>
-
-                    <div className="token-number">
-                      {latestToken.token}
-                    </div>
-
-                    <p>
-                      {latestToken.name}, your department is{" "}
-                      {latestToken.department}.
-                    </p>
-
-                    {latestTokenPatient?.status === "Called" && (
-                      <div
-                        className="doctor-calling-message"
-                        role="alert"
-                      >
-                        🔔 Doctor is calling you!
-                        <p>Please proceed to the doctor's room.</p>
+                {/* Hide the token card after the doctor marks it Completed. */}
+                {latestToken &&
+                  latestTokenPatient?.status !== "Completed" && (
+                    <div className="token-result">
+                      <div className="token-success">
+                        <CheckCircle size={18} />
+                        Token generated successfully
                       </div>
-                    )}
 
-                    <div className="token-details">
-                      <span>
-                        <Users size={15} />{" "}
-                        {departmentWaitingCounts[latestToken.department] || 0}{" "}
-                        waiting in your department
-                      </span>
+                      <div className="token-number">
+                        {latestToken.token}
+                      </div>
 
-                      <span>
-                        <Clock size={15} /> Estimated wait:{" "}
-                        {Math.max(
-                          0,
-                          (departmentWaitingCounts[latestToken.department] || 0) -
-                            1
-                        ) * 10}{" "}
-                        min
-                      </span>
+                      <p>
+                        {latestToken.name}, your department is{" "}
+                        {latestToken.department}.
+                      </p>
+
+                      {latestTokenPatient?.status === "Called" && (
+                        <div
+                          className="doctor-calling-message"
+                          role="alert"
+                        >
+                          🔔 Doctor is calling you!
+                          <p>Please proceed to the doctor's room.</p>
+                        </div>
+                      )}
+
+                      <div className="token-details">
+                        <span>
+                          <Users size={15} />{" "}
+                          {departmentWaitingCounts[latestToken.department] || 0}{" "}
+                          waiting in your department
+                        </span>
+
+                        <span>
+                          <Clock size={15} /> Estimated wait:{" "}
+                          {Math.max(
+                            0,
+                            (departmentWaitingCounts[latestToken.department] ||
+                              0) - 1
+                          ) * 10}{" "}
+                          min
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </section>
 
               <aside className="panel">
