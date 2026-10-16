@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 
 import {
@@ -11,12 +12,14 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   where,
   updateDoc,
   setDoc,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 
 import {
@@ -38,6 +41,7 @@ import {
   Stethoscope,
   Users,
   UserRound,
+  Trash2,
 } from "lucide-react";
 
 import "./index.css";
@@ -63,6 +67,7 @@ function App() {
   const [patients, setPatients] = useState([]);
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState("");
+  const [clearingQueue, setClearingQueue] = useState(false);
 
   const [name, setName] = useState("");
   const [department, setDepartment] = useState("General Medicine");
@@ -359,6 +364,61 @@ function App() {
     }
   }
 
+  // Clear all patient registrations after staff confirmation.
+  async function clearPatientQueue() {
+    if (!staffVerified || clearingQueue) {
+      setNotice("Only authorized staff can clear the queue.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete ALL patient registrations, including completed records? This cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    setClearingQueue(true);
+    setNotice("");
+
+    try {
+      const snapshot = await getDocs(
+        collection(db, "registrations")
+      );
+
+      if (snapshot.empty) {
+        setNotice("The patient queue is already empty.");
+        return;
+      }
+
+      // Delete in batches of 400 documents.
+      const documents = snapshot.docs;
+
+      for (let i = 0; i < documents.length; i += 400) {
+        const batch = writeBatch(db);
+
+        documents.slice(i, i + 400).forEach((patientDoc) => {
+          batch.delete(patientDoc.ref);
+        });
+
+        await batch.commit();
+      }
+
+      setNotice(
+        `Queue cleared. Deleted ${snapshot.size} registration(s).`
+      );
+    } catch (error) {
+      console.error("Clearing patient queue failed:", error);
+
+      setNotice(
+        error.code === "permission-denied"
+          ? "Deletion blocked by Firestore rules. Check the staff delete permission."
+          : "Could not clear the entire queue. Some records may already have been deleted; refresh and check the queue."
+      );
+    } finally {
+      setClearingQueue(false);
+    }
+  }
+
   async function callNext(departmentName) {
     const nextPatient = sortedPatients.find(
       (patient) =>
@@ -382,7 +442,7 @@ function App() {
     (patient) => patient.status === "Completed"
   );
 
-  // Find the latest token's current status from the live Firestore data.
+  // Find the latest token's current status from live Firestore data.
   const latestTokenPatient = latestToken
     ? patients.find((patient) => patient.id === latestToken.id)
     : null;
@@ -476,9 +536,7 @@ function App() {
                   id="staffPassword"
                   type="password"
                   value={staffPassword}
-                  onChange={(event) =>
-                    setStaffPassword(event.target.value)
-                  }
+                  onChange={(event) => setStaffPassword(event.target.value)}
                   placeholder="Enter your password"
                   autoComplete="current-password"
                   required
@@ -629,7 +687,6 @@ function App() {
                       {latestToken.department}.
                     </p>
 
-                    {/* Doctor calling notification */}
                     {latestTokenPatient?.status === "Called" && (
                       <div
                         className="doctor-calling-message"
@@ -739,6 +796,21 @@ function App() {
                   <span className="mini-label">PATIENT MANAGEMENT</span>
                   <h3>Current queue</h3>
                 </div>
+
+                <button
+                  type="button"
+                  className="clear-queue-button"
+                  onClick={clearPatientQueue}
+                  disabled={
+                    !staffVerified ||
+                    clearingQueue ||
+                    queueLoading ||
+                    patients.length === 0
+                  }
+                >
+                  <Trash2 size={15} />
+                  {clearingQueue ? "Clearing..." : "Clear Queue"}
+                </button>
               </div>
 
               {notice && <div className="notice">{notice}</div>}
@@ -879,4 +951,3 @@ function App() {
 }
 
 export default App;
-                                  
